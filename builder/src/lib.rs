@@ -21,7 +21,7 @@ fn get_fields_from_derive_input(st: &DeriveInput) -> syn::Result<&StructNamed> {
             Fields::Named(fields_named) => Ok(&fields_named.named),
             _ => Err(syn::Error::new_spanned(st, "Can only act on named fields, not Unnamed fields and Unit.".to_string()))
         },
-        _ => Err(syn::Error::new_spanned(st, "Must define on Struct, not on Emum or Union.".to_string()))
+        _ => Err(syn::Error::new_spanned(st, "Must define on Struct, not on Enum or Union.".to_string()))
     }
 }
 
