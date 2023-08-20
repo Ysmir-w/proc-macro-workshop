@@ -1,8 +1,8 @@
 use proc_macro::TokenStream;
-use proc_macro2::Ident;
 
+use proc_macro2::Ident;
 use quote::spanned::Spanned;
-use syn::{punctuated::Punctuated, DeriveInput, Field, Token, Data, Fields, Type};
+use syn::{Data, DeriveInput, Field, Fields, punctuated::Punctuated, Token, Type};
 
 #[proc_macro_derive(Builder)]
 pub fn derive(input: TokenStream) -> TokenStream {
@@ -43,6 +43,23 @@ fn generate_builder_struct_factory_init_clauses(fields: &StructNamed) -> syn::Re
     Ok(result)
 }
 
+fn generate_builder_setter_method(fields: &StructNamed) -> syn::Result<Vec<proc_macro2::TokenStream>> {
+    let idents: Vec<&Option<Ident>> = fields.iter().map(|f| &f.ident).collect();
+    let types: Vec<&Type> = fields.iter().map(|f| &f.ty).collect();
+    let mut token_stream_vec: Vec<proc_macro2::TokenStream> = vec![];
+    for (ident, ty) in idents.iter().zip(types.iter()){
+        let token_stream = quote::quote!(
+          fn #ident(&mut self, #ident: #ty) -> &mut Self{
+                self.#ident = core::option::Option::Some(#ident);
+                self
+            }
+        );
+        token_stream_vec.push(token_stream);
+    };
+
+    Ok(token_stream_vec)
+}
+
 fn do_expand(st: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     // 结构体名字字面量
     let struct_name_literal = st.ident.to_string();
@@ -57,6 +74,7 @@ fn do_expand(st: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let fields = get_fields_from_derive_input(st)?;
     let builder_struct_field_def = generate_builder_struct_fields_def(fields)?;
     let builder_struct_factory_init_clauses = generate_builder_struct_factory_init_clauses(fields)?;
+    let builder_setter_method_vec = generate_builder_setter_method(fields)?;
     // 生成builder结构体, 为原始结构体添加builder方法
     let result = quote::quote!(
         pub struct #builder_name_ident {
@@ -68,6 +86,9 @@ fn do_expand(st: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                     #builder_struct_factory_init_clauses
                 }
             }
+        }
+        impl #builder_name_ident {
+            #(#builder_setter_method_vec)*
         }
     );
     Ok(result)
