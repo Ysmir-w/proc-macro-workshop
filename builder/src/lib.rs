@@ -47,7 +47,7 @@ fn generate_builder_setter_method(fields: &StructNamed) -> syn::Result<Vec<proc_
     let idents: Vec<&Option<Ident>> = fields.iter().map(|f| &f.ident).collect();
     let types: Vec<&Type> = fields.iter().map(|f| &f.ty).collect();
     let mut token_stream_vec: Vec<proc_macro2::TokenStream> = vec![];
-    for (ident, ty) in idents.iter().zip(types.iter()){
+    for (ident, ty) in idents.iter().zip(types.iter()) {
         let token_stream = quote::quote!(
           fn #ident(&mut self, #ident: #ty) -> &mut Self{
                 self.#ident = core::option::Option::Some(#ident);
@@ -58,6 +58,36 @@ fn generate_builder_setter_method(fields: &StructNamed) -> syn::Result<Vec<proc_
     };
 
     Ok(token_stream_vec)
+}
+
+fn generate_build_method(fields: &StructNamed, name: &Ident) -> syn::Result<proc_macro2::TokenStream> {
+    let idents: Vec<&Option<Ident>> = fields.iter().map(|f| &f.ident).collect();
+    let mut check_statement_vec = vec![];
+    let mut build_fields = vec![];
+    for ident in idents {
+        let ident_literal = ident.clone().unwrap().to_string();
+        let value = quote::quote!(
+            if self.#ident.is_none() {
+                return core::result::Result::Err(std::format!("field {} is missing.",#ident_literal).into());
+            }
+        );
+        check_statement_vec.push(value);
+
+        let value = quote::quote!(
+            #ident: self.#ident.clone().unwrap()
+        );
+        build_fields.push(value);
+    }
+    let result = quote::quote!(
+        pub fn build(&mut self) -> core::result::Result<#name, std::boxed::Box<dyn std::error::Error>> {
+            #(#check_statement_vec)*
+
+            Ok(#name {
+                #(#build_fields),*
+            })
+        }
+    );
+    Ok(result)
 }
 
 fn do_expand(st: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
@@ -75,6 +105,7 @@ fn do_expand(st: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let builder_struct_field_def = generate_builder_struct_fields_def(fields)?;
     let builder_struct_factory_init_clauses = generate_builder_struct_factory_init_clauses(fields)?;
     let builder_setter_method_vec = generate_builder_setter_method(fields)?;
+    let build_method = generate_build_method(fields, &struct_name_ident)?;
     // 生成builder结构体, 为原始结构体添加builder方法
     let result = quote::quote!(
         pub struct #builder_name_ident {
@@ -89,6 +120,7 @@ fn do_expand(st: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         }
         impl #builder_name_ident {
             #(#builder_setter_method_vec)*
+            #build_method
         }
     );
     Ok(result)
