@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 
 use proc_macro2::Ident;
 use quote::spanned::Spanned;
-use syn::{Data, DeriveInput, Field, Fields, punctuated::Punctuated, Token, Type};
+use syn::{AngleBracketedGenericArguments, Data, DeriveInput, Field, Fields, PathArguments, punctuated::Punctuated, Token, Type};
 
 #[proc_macro_derive(Builder)]
 pub fn derive(input: TokenStream) -> TokenStream {
@@ -28,9 +28,21 @@ fn get_fields_from_derive_input(st: &DeriveInput) -> syn::Result<&StructNamed> {
 
 fn generate_builder_struct_fields_def(fields: &StructNamed) -> syn::Result<proc_macro2::TokenStream> {
     let idents: Vec<&Option<Ident>> = fields.iter().map(|f| &f.ident).collect();
-    let types: Vec<&Type> = fields.iter().map(|f| &f.ty).collect();
+    let types: Vec<proc_macro2::TokenStream> = fields.iter().map(|f| {
+        if let Some(inner_type) = get_optional_inner_type(&f.ty) {
+            quote::quote!(
+                core::option::Option<#inner_type>
+            )
+        } else {
+            let origin_type = &f.ty;
+            quote::quote!(
+                core::option::Option<#origin_type>
+            )
+        }
+    }).collect();
+
     let result = quote::quote!(
-        #(#idents: core::option::Option<#types>),*
+        #(#idents: #types),*
     );
     Ok(result)
 }
@@ -45,7 +57,18 @@ fn generate_builder_struct_factory_init_clauses(fields: &StructNamed) -> syn::Re
 
 fn generate_builder_setter_method(fields: &StructNamed) -> syn::Result<Vec<proc_macro2::TokenStream>> {
     let idents: Vec<&Option<Ident>> = fields.iter().map(|f| &f.ident).collect();
-    let types: Vec<&Type> = fields.iter().map(|f| &f.ty).collect();
+    let types: Vec<proc_macro2::TokenStream> = fields.iter().map(|f| {
+        if let Some(inner_type) = get_optional_inner_type(&f.ty) {
+            quote::quote!(
+                #inner_type
+            )
+        } else {
+            let origin_type = &f.ty;
+            quote::quote!(
+                #origin_type
+            )
+        }
+    }).collect();
     let mut token_stream_vec: Vec<proc_macro2::TokenStream> = vec![];
     for (ident, ty) in idents.iter().zip(types.iter()) {
         let token_stream = quote::quote!(
@@ -62,21 +85,31 @@ fn generate_builder_setter_method(fields: &StructNamed) -> syn::Result<Vec<proc_
 
 fn generate_build_method(fields: &StructNamed, name: &Ident) -> syn::Result<proc_macro2::TokenStream> {
     let idents: Vec<&Option<Ident>> = fields.iter().map(|f| &f.ident).collect();
+    let types: Vec<&Type> = fields.iter().map(|f| &f.ty).collect();
     let mut check_statement_vec = vec![];
     let mut build_fields = vec![];
-    for ident in idents {
-        let ident_literal = ident.clone().unwrap().to_string();
-        let value = quote::quote!(
-            if self.#ident.is_none() {
-                return core::result::Result::Err(std::format!("field {} is missing.",#ident_literal).into());
-            }
-        );
-        check_statement_vec.push(value);
+    for (ident, ty) in idents.iter().zip(types) {
+        let ident = *ident;
+        let mut value;
+        if get_optional_inner_type(ty).is_none() {
+            let ident_literal = ident.clone().unwrap().to_string();
+            value = quote::quote!(
+                if self.#ident.is_none() {
+                    return core::result::Result::Err(std::format!("field {} is missing.",#ident_literal).into());
+                }
+            );
+            check_statement_vec.push(value);
 
-        let value = quote::quote!(
-            #ident: self.#ident.clone().unwrap()
-        );
-        build_fields.push(value);
+            value = quote::quote!(
+                #ident: self.#ident.clone().unwrap()
+            );
+            build_fields.push(value);
+        } else {
+            value = quote::quote!(
+                #ident: self.#ident.clone()
+            );
+            build_fields.push(value);
+        }
     }
     let result = quote::quote!(
         pub fn build(&mut self) -> core::result::Result<#name, std::boxed::Box<dyn std::error::Error>> {
@@ -88,6 +121,27 @@ fn generate_build_method(fields: &StructNamed, name: &Ident) -> syn::Result<proc
         }
     );
     Ok(result)
+}
+
+fn get_optional_inner_type(t: &Type) -> Option<&Type> {
+    if let Type::Path(syn::TypePath {
+                          path: syn::Path {
+                              segments,
+                              ..
+                          },
+                          ..
+                      }) = t {
+        if let Some(seg) = segments.last() {
+            if seg.ident.to_string() == "Option" {
+                if let PathArguments::AngleBracketed(AngleBracketedGenericArguments { args, .. }) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_type)) = args.last() {
+                        return Some(inner_type);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn do_expand(st: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
